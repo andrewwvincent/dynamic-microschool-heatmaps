@@ -41,6 +41,17 @@ function getFirstNonBackgroundLayer(map) {
     return undefined;
 }
 
+// Helper function to find the first road layer
+function findFirstRoadLayer(map) {
+    const layers = map.getStyle().layers;
+    for (const layer of layers) {
+        if (layer.id.includes('road') || layer.id.includes('street')) {
+            return layer.id;
+        }
+    }
+    return undefined;
+}
+
 // Load a batch of tiles in parallel
 async function loadTileBatch(tiles) {
     console.log('Loading batch of tiles:', tiles);
@@ -133,44 +144,31 @@ async function loadTile(gridRef) {
                 type: 'geojson',
                 data: data
             });
+
+            // Find the first neighborhood layer to insert our tile layer before it
+            const layers = map.getStyle().layers;
+            let beforeLayerId;
+            for (const layer of layers) {
+                if (layer.id.startsWith('neighborhood-layer-')) {
+                    beforeLayerId = layer.id;
+                    break;
+                }
+            }
             
-            console.log(`Adding layer for ${gridRef}`);
+            console.log(`Adding layer for ${gridRef} before ${beforeLayerId || 'top'}`);
+            
             map.addLayer({
                 'id': layerId,
                 'type': 'fill',
                 'source': sourceId,
-                'minzoom': 0,
-                'maxzoom': 22,
                 'paint': {
                     'fill-color': '#FF0000',
                     'fill-opacity': 0.5
                 },
                 'metadata': {
-                    'type': 'heatmap-tile' // Mark this as a heatmap tile for easy identification
+                    'type': 'heatmap-tile'
                 }
-            });
-
-            // Move all heatmap tiles to the bottom of the layer stack
-            const style = map.getStyle();
-            const layers = style.layers;
-
-            // Find the index after the last background/base layer
-            let insertIndex = 0;
-            for (let i = 0; i < layers.length; i++) {
-                const layer = layers[i];
-                if (layer.type === 'background' || layer.type === 'fill' || layer.type === 'line' || layer.type === 'raster') {
-                    insertIndex = i + 1;
-                } else {
-                    break;
-                }
-            }
-
-            // Move all heatmap tile layers to just above the base layers
-            layers.forEach((layer, index) => {
-                if (layer.metadata && layer.metadata.type === 'heatmap-tile') {
-                    map.moveLayer(layer.id, layers[insertIndex].id);
-                }
-            });
+            }, beforeLayerId);
 
             loadedTiles.add(gridRef);
             console.log(`Successfully loaded tile ${gridRef}`);
@@ -283,6 +281,7 @@ async function loadNeighborhoodBoundaries(map, stateCode) {
     console.log('Attempting to load neighborhoods for:', stateCode);
     const sourceId = `neighborhood-source-${stateCode}`;
     const layerId = `neighborhood-layer-${stateCode}`;
+    const labelLayerId = `neighborhood-label-${stateCode}`;
 
     try {
         const url = `${BASE_URL}/data/neighborhood-GeoJSON/ZillowNeighborhoods-${stateCode}.geojson`;
@@ -301,7 +300,7 @@ async function loadNeighborhoodBoundaries(map, stateCode) {
                 data: data
             });
 
-            // Add neighborhood layer with higher z-index than tiles
+            // Add neighborhood boundary layer
             map.addLayer({
                 'id': layerId,
                 'type': 'line',
@@ -312,14 +311,68 @@ async function loadNeighborhoodBoundaries(map, stateCode) {
                     'line-opacity': 0.8
                 },
                 'metadata': {
-                    'type': 'neighborhood' // Mark this as a neighborhood layer
+                    'type': 'neighborhood'
                 }
             });
-            console.log(`Added neighborhood layer ${layerId}`);
+
+            // Add neighborhood label layer (initially hidden)
+            map.addLayer({
+                'id': labelLayerId,
+                'type': 'symbol',
+                'source': sourceId,
+                'layout': {
+                    'text-field': ['get', 'NAME'],  // Use uppercase NAME from properties
+                    'text-variable-anchor': ['center'],
+                    'text-radial-offset': 0,
+                    'text-justify': 'auto',
+                    'text-size': 12,
+                    'text-allow-overlap': false,
+                    'visibility': 'none'  // Initially hidden
+                },
+                'paint': {
+                    'text-color': '#000000',
+                    'text-halo-color': '#ffffff',
+                    'text-halo-width': 2
+                },
+                'metadata': {
+                    'type': 'neighborhood-label'
+                }
+            });
+
+            console.log(`Added neighborhood layers ${layerId} and ${labelLayerId}`);
         }
     } catch (error) {
         console.error(`Error loading neighborhoods for ${stateCode}:`, error);
     }
+}
+
+// Initialize map controls
+function initMapControls(map) {
+    // Neighborhood names toggle
+    const neighborhoodNamesToggle = document.getElementById('neighborhood-names-toggle');
+    if (!neighborhoodNamesToggle) {
+        console.error('Could not find neighborhood names toggle element');
+        return;
+    }
+
+    neighborhoodNamesToggle.addEventListener('change', (e) => {
+        const visibility = e.target.checked ? 'visible' : 'none';
+        console.log(`Setting neighborhood labels visibility to: ${visibility}`);
+        
+        // Update all neighborhood label layers
+        const style = map.getStyle();
+        let layersUpdated = 0;
+        
+        style.layers.forEach(layer => {
+            if (layer.metadata && layer.metadata.type === 'neighborhood-label') {
+                map.setLayoutProperty(layer.id, 'visibility', visibility);
+                layersUpdated++;
+                console.log(`Updated visibility for layer: ${layer.id}`);
+            }
+        });
+        
+        console.log(`Updated visibility for ${layersUpdated} neighborhood label layers`);
+    });
 }
 
 // Initialize tile loader
@@ -366,4 +419,4 @@ function initNeighborhoodLoader(map) {
 }
 
 // Export both initialization functions
-export { initTileLoader, initNeighborhoodLoader };
+export { initTileLoader, initNeighborhoodLoader, initMapControls };
